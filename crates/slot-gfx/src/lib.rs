@@ -15,6 +15,9 @@ mod gl;
 mod grade;
 #[cfg(target_os = "macos")]
 mod headless;
+#[cfg(target_os = "linux")]
+#[path = "headless_egl.rs"]
+mod headless;
 #[cfg(feature = "host")]
 mod host;
 #[cfg(unix)]
@@ -43,7 +46,7 @@ pub use grade::{
     blue_light_gain, contrast_boost, dim_gain, saturation_boost, ColorGrade, BLUE_LIGHT_MAX,
     CONTRAST_MAX, SATURATION_MAX,
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use headless::HeadlessSurface;
 #[cfg(feature = "host")]
 pub use host::HostSurface;

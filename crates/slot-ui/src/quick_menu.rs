@@ -146,10 +146,11 @@ pub enum QuickRow {
     Overlay,
     BatteryDisplay,
     System,
+    Search,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 135 + cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 136 + cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -287,6 +288,7 @@ impl QuickRow {
         QuickRow::Overlay,
         QuickRow::BatteryDisplay,
         QuickRow::System,
+        QuickRow::Search,
     ];
 
     pub const MAIN: [QuickRow; 6] = [
@@ -298,13 +300,14 @@ impl QuickRow {
         QuickRow::System,
     ];
 
-    pub const GENERAL: [QuickRow; 8] = [
+    pub const GENERAL: [QuickRow; 9] = [
         QuickRow::Theme,
         QuickRow::Wallpaper,
         QuickRow::WallpaperTint,
         QuickRow::ShelfMode,
         QuickRow::Recents,
         QuickRow::ShowTitles,
+        QuickRow::Search,
         QuickRow::KidMode,
         QuickRow::KidShelf,
     ];
@@ -546,6 +549,7 @@ impl QuickRow {
             | QuickRow::Recents
             | QuickRow::ShelfMode
             | QuickRow::ShowTitles
+            | QuickRow::Search
             | QuickRow::KidMode
             | QuickRow::KidShelf => &QuickRow::GENERAL,
             QuickRow::Wifi
@@ -715,6 +719,7 @@ impl QuickRow {
             QuickRow::Recents => "Recents",
             QuickRow::ShelfMode => "Shelf Mode",
             QuickRow::ShowTitles => "Game Titles",
+            QuickRow::Search => "Search",
             QuickRow::WallpaperTint => "Wallpaper Tint",
             QuickRow::Resume => "Resume",
             QuickRow::UndoSave => "Undo Save",
@@ -839,6 +844,7 @@ impl QuickRow {
                 | QuickRow::Guide
                 | QuickRow::Settings
                 | QuickRow::ExitGame
+                | QuickRow::Search
                 | QuickRow::PlayScreen
                 | QuickRow::PlayGameplay
                 | QuickRow::General

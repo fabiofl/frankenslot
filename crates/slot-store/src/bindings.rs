@@ -570,7 +570,7 @@ impl CarouselAction {
             CarouselAction::PreviousShelf => "Previous Shelf",
             CarouselAction::NextShelf => "Next Shelf",
             CarouselAction::Favorite => "Favorite",
-            CarouselAction::ForgetRecent => "Remove Recent",
+            CarouselAction::ForgetRecent => "Shelf Action",
             CarouselAction::PreviousCollection => "Previous",
             CarouselAction::NextCollection => "Next",
         }

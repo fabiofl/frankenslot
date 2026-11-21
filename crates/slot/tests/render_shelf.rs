@@ -1,13 +1,15 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 mod common;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use slot::app::App;
+use slot::app::{App, Phase};
+use slot::frontend::Frontend;
 use slot_gfx::{Compositor, HeadlessSurface, TexId, OUT_H, OUT_W};
 use slot_input::{Action, Btn};
-use slot_store::{write_slot_state, Appearance, Core, Platform, SlotState};
+use slot_power::SimPlatform;
+use slot_store::{write_slot_state, Appearance, Core, Platform, Recent, SlotState};
 use slot_ui::{
     board_face, cart_face, cart_shadow, chip_face, chip_shadow_face, edge, gb_cart_shadow, housing,
     opening, padded, recess, socket_face, GbShell, TURN_PAD,
@@ -18,8 +20,14 @@ static GL: Mutex<()> = Mutex::new(());
 
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
     let guard = GL.lock().unwrap_or_else(PoisonError::into_inner);
-    let surface = HeadlessSurface::new().ok()?;
-    let compositor = Compositor::new(&surface).ok()?;
+    let renderer = HeadlessSurface::new().and_then(|surface| {
+        let compositor = Compositor::new(&surface)?;
+        Ok((surface, compositor))
+    });
+    #[cfg(target_os = "linux")]
+    let (surface, compositor) = renderer.expect("initialize the headless shelf renderer");
+    #[cfg(target_os = "macos")]
+    let (surface, compositor) = renderer.ok()?;
     Some((guard, surface, compositor))
 }
 
@@ -139,6 +147,11 @@ fn shot(app: &App, c: &mut Compositor, name: &str) -> Vec<u8> {
     c.begin_frame();
     c.draw_list(&out);
     let px = c.read_frame();
+    dump_frame(&px, name);
+    px
+}
+
+fn dump_frame(px: &[u8], name: &str) {
     if let Ok(dir) = std::env::var("SCRATCH_PNG_DIR") {
         let path = format!("{dir}/shelf-{name}.png");
         let file = std::fs::File::create(&path).expect("create png");
@@ -147,11 +160,92 @@ fn shot(app: &App, c: &mut Compositor, name: &str) -> Vec<u8> {
         e.set_depth(png::BitDepth::Eight);
         e.write_header()
             .expect("png header")
-            .write_image_data(&px)
+            .write_image_data(px)
             .expect("png data");
         println!("wrote {path}");
     }
-    px
+}
+
+#[test]
+fn recents_actions_and_direct_search_render_their_screens() {
+    let Some((_guard, _surface, mut compositor)) = compositor() else {
+        assert!(
+            std::env::var_os("SCRATCH_PNG_DIR").is_none(),
+            "an offscreen OpenGL context is required to capture screenshots"
+        );
+        return;
+    };
+    let card = common::tmp_root_with_carts(&["Comet", "Quest Advance"]);
+    common::write_gb_cart(&card, "Quest", "QUEST");
+    write_slot_state(
+        card.path(),
+        &SlotState {
+            clock_set: true,
+            show_recents: true,
+            recents: vec![
+                Recent {
+                    platform: Platform::Gb,
+                    stem: "Quest".into(),
+                },
+                Recent {
+                    platform: Platform::Gba,
+                    stem: "Comet".into(),
+                },
+            ],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut frontend = Frontend::boot(Box::new(SimPlatform::at(card.path().into())));
+    let panel = (OUT_W, OUT_H);
+    frontend.upload_faces(&mut compositor);
+    frontend.upload_bezel(&mut compositor, panel);
+    let mut capture = |frontend: &mut Frontend, name| {
+        for _ in 0..30 {
+            let next = frontend.app().now() + 17;
+            frontend.app_mut().tick_ms(next);
+            frontend.app_mut().update(0.017);
+            frontend.render(&mut compositor, panel);
+        }
+        let frame = compositor.read_window(panel);
+        assert!(frame.chunks_exact(4).any(|pixel| pixel[..3] != frame[..3]));
+        dump_frame(&frame, name);
+        frame
+    };
+    assert_eq!(frontend.app().shelf_key(), "recents");
+
+    common::through(frontend.app_mut(), Btn::Y);
+    assert!(matches!(
+        frontend.app().phase(),
+        Phase::RecentActions {
+            remove_selected: false
+        }
+    ));
+    let add = capture(&mut frontend, "recent-actions-add-favorite");
+    common::through(frontend.app_mut(), Btn::A);
+    assert!(frontend.app().is_favorite(Platform::Gb, "Quest"));
+    common::through(frontend.app_mut(), Btn::Y);
+    let remove = capture(&mut frontend, "recent-actions-remove-favorite");
+    assert_ne!(add, remove, "the favorite option did not change on screen");
+    common::through(frontend.app_mut(), Btn::B);
+    assert_eq!(frontend.app().selected_stem(), Some("Quest"));
+
+    common::through(frontend.app_mut(), Btn::X);
+    assert_eq!(frontend.app().keyboard().unwrap().title(), "Search");
+    common::through(frontend.app_mut(), Btn::A);
+    assert_eq!(frontend.app().keyboard().unwrap().text(), "q");
+    common::through(frontend.app_mut(), Btn::Start);
+    assert!(matches!(frontend.app().phase(), Phase::Search { hits, .. } if hits.len() == 2));
+    capture(&mut frontend, "search-from-recents");
+    common::through(frontend.app_mut(), Btn::B);
+    assert_eq!(frontend.app().selected_stem(), Some("Quest"));
+
+    common::through(frontend.app_mut(), Btn::Y);
+    common::through(frontend.app_mut(), Btn::Down);
+    common::through(frontend.app_mut(), Btn::A);
+    assert_eq!(frontend.app().selected_stem(), Some("Comet"));
+    assert!(frontend.app().is_favorite(Platform::Gb, "Quest"));
+    capture(&mut frontend, "recents-after-removal");
 }
 
 fn let_it_hop(app: &mut App) {

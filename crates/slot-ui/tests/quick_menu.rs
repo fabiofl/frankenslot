@@ -93,6 +93,7 @@ fn the_rows_run_in_the_order_the_user_chose() {
             "Shelf Mode",
             "Recents",
             "Game Titles",
+            "Search",
             "Kid Mode",
             "Kid Shelf"
         ]
@@ -119,7 +120,7 @@ fn the_rows_run_in_the_order_the_user_chose() {
     );
     assert_eq!(
         QuickRow::SHELF_KEYS.map(QuickRow::label),
-        ["Previous Shelf", "Next Shelf", "Favorite", "Remove Recent"]
+        ["Previous Shelf", "Next Shelf", "Favorite", "Shelf Action"]
     );
     assert_eq!(
         QuickRow::SCREEN.map(QuickRow::label),
@@ -221,7 +222,8 @@ fn the_rows_run_in_the_order_the_user_chose() {
             QuickRow::RommPort,
             QuickRow::RommPair,
             QuickRow::RommDisconnect,
-            QuickRow::System
+            QuickRow::System,
+            QuickRow::Search
         ]
     );
     for page in [

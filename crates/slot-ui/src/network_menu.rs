@@ -185,15 +185,20 @@ fn push(out: &mut Vec<Draw>, (tex, w, h): NetFace, x: f32, y: f32) {
 
 impl NetworkList<'_> {
     pub fn draw(&self, out: &mut Vec<Draw>) {
+        self.draw_window(0, self.lines.len(), out);
+    }
+
+    pub fn draw_window(&self, first: usize, line_count: usize, out: &mut Vec<Draw>) {
         draw_menu_ground(self.canvas, self.ground, out);
         let pad = MENU_PAD as f32;
         let right = self.canvas.w - QUICK_EDGE;
-        let count = self.lines.len() + self.message.is_some() as usize;
+        let count = line_count + self.message.is_some() as usize;
         let (start, len) = net_window(self.canvas, count, self.selected);
         for at in start..start + len {
             let top = net_row_top(self.canvas, count, self.selected, at);
-            let Some(line) = self.lines.get(at) else {
-                if let Some(message) = self.message {
+            let line = at.checked_sub(first).and_then(|i| self.lines.get(i));
+            let Some(line) = line else {
+                if let Some(message) = self.message.filter(|_| at == line_count) {
                     let y = top + TYPE_DROP + (MENU_H as f32 - message.2 as f32) / 2.0;
                     push(out, message, self.canvas.centred(message.1 as f32), y);
                 }

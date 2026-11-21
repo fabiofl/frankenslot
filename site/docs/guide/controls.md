@@ -2,7 +2,7 @@
 
 Four submenus for adjusting controls can be found in Settings → Controls.
 
-- **Shelf**: the keys for getting around the shelf. Previous Shelf, Next Shelf, Favorite and Remove Recent.
+- **Shelf**: the keys for getting around the shelf. Previous Shelf, Next Shelf, Favorite and Shelf Action.
 - **Collections**: the keys for flipping through [collections](collections.md), Previous and Next.
 - **Shortcuts**: everything you do with a chord in game. Save and load states, brightness, blue light, shaders, palettes, color correction, screenshots, fast-forward, rewind and the [solar sensor](playing.md#solar-sensor).
 - **In-Game**: which console button each button on your device presses. This is where you'd swap A and B, or move Turbo A and Turbo B off X and Y.
@@ -76,10 +76,14 @@ Hold <kbd>A</kbd>
 :   Start the game fresh
 
 <kbd>Y</kbd>
-:   Favorite / Unfavorite selected game
+:   Favorite / Unfavorite selected game. On Recents, open the cart's menu to change its favorite status or remove it from Recents
 
 <kbd>X</kbd>
-:   Remove selected game from Recents
+:   Open Search. In a collection, pick up the selected game to move it
+
+The default Shelf Action uses X for Search and collection moves. Existing custom
+Shelf Action bindings still remove the selected game on Recents and move games in
+collections. Search is also available under Settings → Shelf.
 
 <kbd>MENU</kbd>
 :   Open the settings menu

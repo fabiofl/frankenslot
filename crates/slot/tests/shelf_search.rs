@@ -4,8 +4,8 @@ use slot::app::Phase;
 use slot::session::Session;
 use slot_input::{Btn, RawEvent};
 use slot_store::{
-    write_carousel, write_slot_state, Binding, CarouselAction, CarouselKeys, Device, KidMode,
-    Platform, Recent, ShelfMode, SlotState,
+    read_slot_state, write_carousel, write_slot_state, Binding, CarouselAction, CarouselKeys,
+    Device, KidMode, Platform, Recent, ShelfMode, SlotState,
 };
 use slot_ui::QuickRow;
 use tempfile::TempDir;
@@ -48,6 +48,11 @@ impl Player {
     }
 
     fn open_search(&mut self) {
+        self.tap(Btn::X);
+        assert_eq!(self.session.app().keyboard().unwrap().title(), "Search");
+    }
+
+    fn open_search_in_settings(&mut self) {
         self.tap(Btn::Menu);
         assert_eq!(self.session.app().quick_menu(), Some(QuickRow::General));
         self.tap(Btn::A);
@@ -142,7 +147,7 @@ fn empty_results_and_cancelling_keyboard_return_to_the_same_cart() {
 }
 
 #[test]
-fn search_preserves_default_and_remapped_remove_recent() {
+fn search_opens_from_recents_and_keeps_remapped_bindings() {
     let card = card();
     let state = SlotState {
         show_recents: true,
@@ -154,19 +159,109 @@ fn search_preserves_default_and_remapped_remove_recent() {
     };
     let mut player = Player::boot(&card, state.clone());
     assert_eq!(player.session.app().shelf_key(), "recents");
-    player.tap(Btn::X);
-    assert_eq!(player.session.app().shelf_key(), "gba");
+    player.open_search();
+    player.tap(Btn::Y);
+    assert_eq!(player.session.app().shelf_key(), "recents");
+    assert_eq!(player.session.app().selected_stem(), Some("Comet"));
 
     let mut carousel = CarouselKeys::default();
     carousel.set(CarouselAction::ForgetRecent, Binding::plain(Device::B));
     write_carousel(card.path(), &carousel).unwrap();
-    let mut player = Player::boot(&card, state);
+    let mut player = Player::boot(&card, state.clone());
     player.open_search();
     player.tap(Btn::Y);
-    player.tap(Btn::X);
-    assert_eq!(player.session.app().shelf_key(), "recents");
     player.tap(Btn::B);
     assert_eq!(player.session.app().shelf_key(), "gba");
+
+    carousel.set(CarouselAction::Favorite, Binding::plain(Device::X));
+    write_carousel(card.path(), &carousel).unwrap();
+    let mut player = Player::boot(&card, state);
+    player.tap(Btn::X);
+    assert!(player.session.app().keyboard().is_none());
+    assert!(player.session.app().is_favorite(Platform::Gba, "Comet"));
+    player.open_search_in_settings();
+}
+
+#[test]
+fn recent_actions_keep_favorites_and_recent_history_independent() {
+    let card = card();
+    let recents = vec![
+        Recent {
+            platform: Platform::Gb,
+            stem: "Orbit".into(),
+        },
+        Recent {
+            platform: Platform::Gba,
+            stem: "Comet".into(),
+        },
+    ];
+    let mut player = Player::boot(
+        &card,
+        SlotState {
+            show_recents: true,
+            recents: recents.clone(),
+            ..SlotState::default()
+        },
+    );
+    player.tap(Btn::Y);
+    assert!(matches!(
+        player.session.app().phase(),
+        Phase::RecentActions {
+            remove_selected: false
+        }
+    ));
+    player.tap(Btn::A);
+    assert!(player.session.app().is_favorite(Platform::Gb, "Orbit"));
+    assert_eq!(read_slot_state(card.path()).recents, recents);
+
+    player.tap(Btn::Y);
+    player.tap(Btn::Down);
+    player.tap(Btn::B);
+    assert!(matches!(player.session.app().phase(), Phase::Shelf));
+    assert_eq!(player.session.app().shelf_key(), "recents");
+    assert_eq!(player.session.app().selected_stem(), Some("Orbit"));
+    assert_eq!(read_slot_state(card.path()).recents, recents);
+    assert!(player.session.app().is_favorite(Platform::Gb, "Orbit"));
+
+    player.tap(Btn::Y);
+    player.tap(Btn::A);
+    assert!(!player.session.app().is_favorite(Platform::Gb, "Orbit"));
+    assert_eq!(read_slot_state(card.path()).recents, recents);
+
+    player.tap(Btn::Y);
+    player.tap(Btn::A);
+    player.tap(Btn::Y);
+    player.tap(Btn::Down);
+    player.tap(Btn::A);
+    assert_eq!(player.session.app().shelf_key(), "recents");
+    assert_eq!(player.session.app().selected_stem(), Some("Comet"));
+    assert!(read_slot_state(card.path()).is_favorite(Platform::Gb, "Orbit"));
+    assert_eq!(read_slot_state(card.path()).recents, recents[1..]);
+    assert!(card.path().join("Games/GB/Orbit.gb").is_file());
+}
+
+#[test]
+fn holding_y_on_recents_keeps_the_collection_action() {
+    let card = card();
+    let mut player = Player::boot(
+        &card,
+        SlotState {
+            show_recents: true,
+            recents: vec![Recent {
+                platform: Platform::Gba,
+                stem: "Comet".into(),
+            }],
+            ..SlotState::default()
+        },
+    );
+    player.session.feed([RawEvent::Down(Btn::Y)], 500);
+    player.session.feed([], 1_100);
+    player.session.feed([RawEvent::Up(Btn::Y)], 1_200);
+    assert!(matches!(player.session.app().phase(), Phase::Shelf));
+    assert!(matches!(
+        player.session.app().edit(),
+        Some(slot::editing::Edit::Choosing { .. })
+    ));
 }
 
 #[test]
@@ -179,6 +274,8 @@ fn search_respects_shelf_access_restrictions() {
             ..SlotState::default()
         },
     );
+    kid.tap(Btn::X);
+    assert!(kid.session.app().keyboard().is_none());
     kid.tap(Btn::Menu);
     assert!(matches!(kid.session.app().phase(), Phase::Shelf));
     assert!(kid.session.app().keyboard().is_none());
@@ -190,6 +287,8 @@ fn search_respects_shelf_access_restrictions() {
             ..SlotState::default()
         },
     );
+    collections.tap(Btn::X);
+    assert!(collections.session.app().keyboard().is_none());
     collections.tap(Btn::Menu);
     collections.tap(Btn::A);
     assert!(!QuickRow::General

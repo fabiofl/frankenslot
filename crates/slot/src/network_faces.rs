@@ -8,7 +8,7 @@ use slot_ui::{
     quick_value_face, toast_face_text, Keyboard, NetFace, NetIcons, NetLine, Toast, UndoFace,
 };
 
-use crate::app::{App, NetLegends, PairFaces, PairView};
+use crate::app::{App, NetLegends, PairFaces, PairView, RecentActionFaces};
 use crate::networks::{Line, SCANNING_MESSAGE, WIFI_OFF_MESSAGE};
 use crate::search::SearchFaces;
 
@@ -83,6 +83,30 @@ impl NetworkSync {
         self.sync_collection_toast(app, compositor);
         self.sync_pair(app, compositor);
         self.search.sync(app, compositor);
+        if app.needs_recent_action_faces() {
+            let mut line = |text| NetLine {
+                label: [false, true].map(|lit| {
+                    let face = quick_value_face(text, lit);
+                    let id = compositor.create_texture(face.w, face.h, &face.rgba);
+                    (id, face.w, face.h)
+                }),
+                value: None,
+                lock: false,
+                bars: None,
+            };
+            let favorite = ["Add to Favorites", "Remove from Favorites"].map(&mut line);
+            let remove = line("Remove from Recents");
+            let choose = [false, true].map(|light| {
+                let [_, face] = prompt_legends(footer_ink(light), "Back", "Choose");
+                let id = compositor.create_texture(face.w, face.h, &face.rgba);
+                (id, face.w)
+            });
+            app.set_recent_action_faces(RecentActionFaces {
+                favorite,
+                remove,
+                choose,
+            });
+        }
         let Some(screen) = app.network_screen() else {
             return;
         };

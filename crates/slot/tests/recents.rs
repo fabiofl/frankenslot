@@ -255,11 +255,13 @@ fn three_recents(root: &Path) -> App {
 }
 
 #[test]
-fn x_on_recents_takes_the_selected_game_off_and_selects_the_next() {
+fn removing_a_recent_from_the_menu_selects_the_next_game() {
     let d = card();
     let mut a = three_recents(d.path());
     assert_eq!(a.selected_stem(), Some("Tetris"));
-    press(&mut a, Btn::X);
+    press(&mut a, Btn::Y);
+    press(&mut a, Btn::Down);
+    press(&mut a, Btn::A);
     assert_eq!(a.shelf_platform_name(), Some("Recents"));
     assert_eq!(a.selected_stem(), Some("Emerald"));
     assert_eq!(
@@ -272,13 +274,14 @@ fn x_on_recents_takes_the_selected_game_off_and_selects_the_next() {
 }
 
 #[test]
-fn x_on_a_console_shelf_leaves_recents_alone() {
+fn opening_search_on_a_console_shelf_leaves_recents_alone() {
     let d = card();
     let mut a = three_recents(d.path());
     while a.shelf_platform_name() != Some("Game Boy Advance") {
         press(&mut a, Btn::R1);
     }
     press(&mut a, Btn::X);
+    assert!(a.keyboard().is_some());
     assert_eq!(read_slot_state(d.path()).recents.len(), 3);
 }
 
@@ -294,7 +297,9 @@ fn removing_the_last_recent_moves_off_the_empty_shelf() {
         },
     );
     assert_eq!(a.shelf_platform_name(), Some("Recents"));
-    press(&mut a, Btn::X);
+    press(&mut a, Btn::Y);
+    press(&mut a, Btn::Down);
+    press(&mut a, Btn::A);
     assert!(read_slot_state(d.path()).recents.is_empty());
     assert_ne!(a.shelf_platform_name(), Some("Recents"));
     assert!(a.selected_stem().is_some());

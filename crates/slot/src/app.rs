@@ -424,6 +424,9 @@ pub enum Phase {
         hits: Vec<SearchHit>,
         cursor: usize,
     },
+    RecentActions {
+        remove_selected: bool,
+    },
     Inserting {
         cart: String,
         t: f32,
@@ -498,6 +501,12 @@ pub struct NetLegends {
     pub retry: [(TexId, u32); 2],
     pub disconnect: [(TexId, u32); 2],
     pub forget: [(TexId, u32); 2],
+}
+
+pub(crate) struct RecentActionFaces {
+    pub(crate) favorite: [slot_ui::NetLine; 2],
+    pub(crate) remove: slot_ui::NetLine,
+    pub(crate) choose: [(TexId, u32); 2],
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -863,6 +872,7 @@ pub struct App {
     keyboard: Option<(slot_ui::Keyboard, KeyboardFor)>,
     keyboard_tex: Option<slot_ui::KeyboardTex>,
     search_faces: Option<SearchFaces>,
+    recent_action_faces: Option<RecentActionFaces>,
     net_lines: Vec<slot_ui::NetLine>,
     net_message: Option<slot_ui::NetFace>,
     net_icons: Option<slot_ui::NetIcons>,
@@ -1089,6 +1099,7 @@ impl App {
             keyboard: None,
             keyboard_tex: None,
             search_faces: None,
+            recent_action_faces: None,
             net_lines: Vec::new(),
             net_message: None,
             net_icons: None,
@@ -4476,6 +4487,7 @@ impl App {
             || self.shutting_down();
         let shelf = matches!(self.phase, Phase::Shelf)
             && self.core_picker.is_none()
+            && self.keyboard.is_none()
             && !self.repair_prompt
             && self.reset_prompt.is_none()
             && self.studio.is_none()
@@ -6243,8 +6255,30 @@ impl App {
                 Action::NextShelf => self.switch_shelf(1),
                 Action::PreviousCollection => self.flip_stack(-1),
                 Action::NextCollection => self.flip_stack(1),
+                Action::Favorite
+                    if self.shelf_at == RECENTS_AT
+                        && self.carousel.get(slot_store::CarouselAction::Favorite)
+                            == Binding::plain(Device::Y) =>
+                {
+                    self.shelf_mut().release_hold();
+                    self.play_held = None;
+                    self.phase = Phase::RecentActions {
+                        remove_selected: false,
+                    };
+                }
                 Action::Favorite => self.toggle_favorite(),
-                Action::ForgetRecent if self.shelf_at == RECENTS_AT => self.forget_recent(),
+                Action::ForgetRecent
+                    if self.shelf_at == RECENTS_AT
+                        && self.carousel.get(slot_store::CarouselAction::ForgetRecent)
+                            != Binding::plain(Device::X) =>
+                {
+                    self.forget_recent();
+                }
+                Action::GbaDown(Btn::X)
+                    if self.on_collection().is_none() && self.x_available_for_search() =>
+                {
+                    self.open_search();
+                }
                 Action::GbaDown(Btn::Up) => self.jump_letter(-1),
                 Action::GbaDown(Btn::Down) => self.jump_letter(1),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
@@ -6318,6 +6352,9 @@ impl App {
             }
             Phase::QuickMenu { row } => self.quick_menu_input(row, action),
             Phase::Search { .. } => self.search_input(action),
+            Phase::RecentActions { remove_selected } => {
+                self.recent_actions_input(action, remove_selected);
+            }
             Phase::Networks { .. } => self.networks_input(action),
             Phase::NetworkScan { .. } => self.network_scan_input(action),
             Phase::NetworkPage { .. } => self.network_page_input(action),
@@ -6525,17 +6562,7 @@ impl App {
                 self.phase = clock_screen(self.utc_secs(), &self.state, self.has_saved(), true);
             }
             QuickRow::About => self.phase = Phase::About,
-            QuickRow::Search => {
-                self.shelf_mut().release_hold();
-                self.play_held = None;
-                self.open_keyboard(
-                    "Search",
-                    None,
-                    KeyboardFor::Search,
-                    slot_ui::Layout::General,
-                    "",
-                );
-            }
+            QuickRow::Search => self.open_search(),
             QuickRow::FetchArt => self.open_fetch_missing_art(),
             #[cfg(feature = "nds")]
             QuickRow::FetchBoxArt => self.open_fetch_box_art(),
@@ -8328,6 +8355,7 @@ impl App {
             self.phase,
             Phase::QuickMenu { .. }
                 | Phase::Search { .. }
+                | Phase::RecentActions { .. }
                 | Phase::About
                 | Phase::Networks { .. }
                 | Phase::NetworkScan { .. }
@@ -8491,6 +8519,9 @@ impl App {
             }
             Phase::QuickMenu { .. } if self.keyboard.is_some() => self.draw_networks(out),
             Phase::Search { hits, cursor } => self.draw_search(hits.len(), *cursor, out),
+            Phase::RecentActions { remove_selected } => {
+                self.draw_recent_actions(*remove_selected, out);
+            }
             Phase::QuickMenu { row } => {
                 QuickMenu {
                     row: *row,
@@ -11324,6 +11355,7 @@ impl App {
             Phase::Shelf
                 | Phase::QuickMenu { .. }
                 | Phase::Search { .. }
+                | Phase::RecentActions { .. }
                 | Phase::About
                 | Phase::SetClock { .. }
                 | Phase::Networks { .. }
@@ -14148,6 +14180,91 @@ impl App {
             }
             slot_ui::Typed::Done(text) => self.keyboard_done(text),
             _ => {}
+        }
+    }
+
+    fn x_available_for_search(&self) -> bool {
+        !self.binding_table().entries().iter().any(|entry| {
+            let chord = entry.chord;
+            let default_x = entry.action == Action::ForgetRecent
+                && chord.button == Btn::X
+                && chord.modifier.is_none();
+            let uses_x =
+                chord.button == Btn::X || chord.modifier == Some(slot_input::Mod::Button(Btn::X));
+            entry.contexts.has(slot_input::Context::Shelf) && uses_x && !default_x
+        })
+    }
+
+    fn open_search(&mut self) {
+        if self.kid_locked() || self.state.shelf_mode == ShelfMode::Collections {
+            return;
+        }
+        self.shelf_mut().release_hold();
+        self.play_held = None;
+        self.open_keyboard(
+            "Search",
+            None,
+            KeyboardFor::Search,
+            slot_ui::Layout::General,
+            "",
+        );
+    }
+
+    fn recent_actions_input(&mut self, action: Action, remove_selected: bool) {
+        match action {
+            Action::GbaDown(Btn::Up | Btn::Down) => {
+                self.phase = Phase::RecentActions {
+                    remove_selected: !remove_selected,
+                };
+            }
+            Action::GbaDown(Btn::A) => {
+                self.phase = Phase::Shelf;
+                if remove_selected {
+                    self.forget_recent();
+                } else {
+                    self.toggle_favorite();
+                }
+            }
+            Action::GbaDown(Btn::B) | Action::QuickMenu => self.phase = Phase::Shelf,
+            _ => {}
+        }
+    }
+
+    pub(crate) fn needs_recent_action_faces(&self) -> bool {
+        matches!(self.phase, Phase::RecentActions { .. }) && self.recent_action_faces.is_none()
+    }
+
+    pub(crate) fn set_recent_action_faces(&mut self, faces: RecentActionFaces) {
+        self.recent_action_faces = Some(faces);
+    }
+
+    fn draw_recent_actions(&self, remove_selected: bool, out: &mut Vec<Draw>) {
+        let Some(faces) = &self.recent_action_faces else {
+            return;
+        };
+        let favorite = self
+            .selected_cart()
+            .is_some_and(|cart| self.is_favorite(cart.platform, &cart.stem));
+        slot_ui::NetworkList {
+            lines: &[faces.favorite[favorite as usize], faces.remove],
+            icons: None,
+            selected: remove_selected as usize,
+            message: None,
+            pointer: self.quick_menu_faces.as_ref().map(|f| f.pointer),
+            ground: self.menu_ground(),
+            canvas: self.canvas(),
+        }
+        .draw(out);
+        draw_empty_slot(self.canvas(), self.slot_faces, out);
+        if let Some(menu) = &self.quick_menu_faces {
+            let light = self.light();
+            let back = if light {
+                menu.legend_light[0]
+            } else {
+                menu.legend[0]
+            };
+            self.draw_side_legend(back, false, self.legend_y(), out);
+            self.draw_side_legend(faces.choose[light as usize], true, self.legend_y(), out);
         }
     }
 

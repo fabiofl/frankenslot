@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use slot_gfx::{Compositor, TexId};
+use slot_store::Platform;
 use slot_ui::{
     footer_ink, keyboard_cap_faces, keyboard_faces, keyboard_text_face, menu_detail_face,
     menu_face, net_bars_face, net_lock_face, pair_face, pair_text_width, prompt_legends,
@@ -9,6 +10,7 @@ use slot_ui::{
 
 use crate::app::{App, NetLegends, PairFaces, PairView};
 use crate::networks::{Line, SCANNING_MESSAGE, WIFI_OFF_MESSAGE};
+use crate::search::SearchFaces;
 
 #[derive(PartialEq)]
 struct KeyShape {
@@ -46,6 +48,16 @@ pub struct NetworkSync {
     collection_said: u64,
     pair: Option<PairView>,
     pair_pool: Vec<TexId>,
+    search: SearchSync,
+}
+
+#[derive(Default)]
+struct SearchSync {
+    first: Option<usize>,
+    shown: Vec<(String, Platform)>,
+    lines: Vec<NetLine>,
+    spare: Vec<TexId>,
+    statics: Option<(NetFace, [(TexId, u32); 2])>,
 }
 
 fn reuse(compositor: &mut Compositor, spare: &mut Vec<TexId>, face: &UndoFace) -> NetFace {
@@ -70,6 +82,7 @@ impl NetworkSync {
         self.sync_forgotten(app, compositor);
         self.sync_collection_toast(app, compositor);
         self.sync_pair(app, compositor);
+        self.search.sync(app, compositor);
         let Some(screen) = app.network_screen() else {
             return;
         };
@@ -316,5 +329,68 @@ impl NetworkSync {
         });
         app.set_keyboard_tex(Some(tex));
         self.keys = Some(shape);
+    }
+}
+
+impl SearchSync {
+    fn sync(&mut self, app: &mut App, compositor: &mut Compositor) {
+        let Some((first, hits)) = app.search_window() else {
+            return;
+        };
+        if self.first == Some(first)
+            && self.shown.len() == hits.len()
+            && self
+                .shown
+                .iter()
+                .zip(hits)
+                .all(|((title, platform), hit)| *title == hit.title && *platform == hit.platform)
+        {
+            return;
+        }
+        for line in self.lines.drain(..) {
+            self.spare.extend(line.label.map(|f| f.0));
+            if let Some(value) = line.value {
+                self.spare.extend(value.map(|f| f.0));
+            }
+        }
+        self.first = Some(first);
+        self.shown = hits
+            .iter()
+            .map(|hit| (hit.title.clone(), hit.platform))
+            .collect();
+        let mut pair = |text| {
+            [false, true]
+                .map(|lit| reuse(compositor, &mut self.spare, &quick_value_face(text, lit)))
+        };
+        self.lines = self
+            .shown
+            .iter()
+            .map(|(title, platform)| NetLine {
+                label: pair(title.as_str()),
+                value: Some(pair(platform.dir_name())),
+                lock: false,
+                bars: None,
+            })
+            .collect();
+        let (empty, go) = *self.statics.get_or_insert_with(|| {
+            let go = [false, true].map(|light| {
+                let [_, face] = prompt_legends(footer_ink(light), "Back", "Go to Game");
+                let tex = compositor.create_texture(face.w, face.h, &face.rgba);
+                (tex, face.w)
+            });
+            let face = menu_detail_face("No games match");
+            let empty = (
+                compositor.create_texture(face.w, face.h, &face.rgba),
+                face.w,
+                face.h,
+            );
+            (empty, go)
+        });
+        app.set_search_faces(SearchFaces {
+            first,
+            lines: self.lines.clone(),
+            empty,
+            go,
+        });
     }
 }

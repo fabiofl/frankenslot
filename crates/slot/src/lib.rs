@@ -63,6 +63,7 @@ pub mod rewind;
 pub mod romm;
 pub mod root;
 pub mod screen;
+pub mod search;
 pub mod server;
 pub mod session;
 pub mod shot_loader;

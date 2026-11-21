@@ -40,6 +40,7 @@ use crate::loading_mark::LoadingMark;
 use crate::persist::{self, Snapshot};
 use crate::print_scene::{print_draws, Cue, PrintArtState, PrintFrame, PrintTextures};
 use crate::romm::{no_romm_jobs, PairFail, RommEvent, RommJob, RommJobs};
+use crate::search::{SearchFaces, SearchHit};
 use crate::server::{ServerNet, ServerPaper, ServerSession};
 use crate::unwrap_scene::{unwrap_draws, UnwrapScene, UnwrapTextures};
 use crate::update::{
@@ -419,6 +420,10 @@ pub enum Phase {
     QuickMenu {
         row: QuickRow,
     },
+    Search {
+        hits: Vec<SearchHit>,
+        cursor: usize,
+    },
     Inserting {
         cart: String,
         t: f32,
@@ -482,6 +487,7 @@ pub enum KeyboardFor {
     RommServer,
     RommPort,
     Nickname,
+    Search,
 }
 
 pub struct NetLegends {
@@ -856,6 +862,7 @@ pub struct App {
     wifi_scanning: bool,
     keyboard: Option<(slot_ui::Keyboard, KeyboardFor)>,
     keyboard_tex: Option<slot_ui::KeyboardTex>,
+    search_faces: Option<SearchFaces>,
     net_lines: Vec<slot_ui::NetLine>,
     net_message: Option<slot_ui::NetFace>,
     net_icons: Option<slot_ui::NetIcons>,
@@ -1081,6 +1088,7 @@ impl App {
             wifi_scanning: false,
             keyboard: None,
             keyboard_tex: None,
+            search_faces: None,
             net_lines: Vec::new(),
             net_message: None,
             net_icons: None,
@@ -1600,7 +1608,7 @@ impl App {
         }
         match self.phase {
             Phase::SetClock { .. } => true,
-            Phase::QuickMenu { .. } => vertical,
+            Phase::QuickMenu { .. } | Phase::Search { .. } => vertical,
             Phase::Shelf => vertical && self.core_picker.is_none(),
             Phase::Polaroids { .. } if self.guide.is_some() => true,
             Phase::Polaroids { .. } => match self.shot_viewer.as_ref().map(ShotViewer::mode) {
@@ -2999,6 +3007,7 @@ impl App {
             | QuickRow::GbaBezel
             | QuickRow::Bezel
             | QuickRow::General
+            | QuickRow::Search
             | QuickRow::System
             | QuickRow::ShelfPrev
             | QuickRow::ShelfNext
@@ -3750,6 +3759,9 @@ impl App {
         let mut hidden = Vec::new();
         if self.state.kid_mode != KidMode::OneShelf {
             hidden.push(QuickRow::KidShelf);
+        }
+        if self.state.shelf_mode == ShelfMode::Collections {
+            hidden.push(QuickRow::Search);
         }
         if cfg!(feature = "nds") || self.kid_locked() {
             hidden.push(QuickRow::Nickname);
@@ -6305,6 +6317,7 @@ impl App {
                 self.begin_restart()
             }
             Phase::QuickMenu { row } => self.quick_menu_input(row, action),
+            Phase::Search { .. } => self.search_input(action),
             Phase::Networks { .. } => self.networks_input(action),
             Phase::NetworkScan { .. } => self.network_scan_input(action),
             Phase::NetworkPage { .. } => self.network_page_input(action),
@@ -6512,6 +6525,17 @@ impl App {
                 self.phase = clock_screen(self.utc_secs(), &self.state, self.has_saved(), true);
             }
             QuickRow::About => self.phase = Phase::About,
+            QuickRow::Search => {
+                self.shelf_mut().release_hold();
+                self.play_held = None;
+                self.open_keyboard(
+                    "Search",
+                    None,
+                    KeyboardFor::Search,
+                    slot_ui::Layout::General,
+                    "",
+                );
+            }
             QuickRow::FetchArt => self.open_fetch_missing_art(),
             #[cfg(feature = "nds")]
             QuickRow::FetchBoxArt => self.open_fetch_box_art(),
@@ -6998,6 +7022,7 @@ impl App {
             | QuickRow::ControlsInGame
             | QuickRow::LidOff
             | QuickRow::FetchArt
+            | QuickRow::Search
             | QuickRow::Network
             | QuickRow::Wifi
             | QuickRow::WifiPower
@@ -8302,6 +8327,7 @@ impl App {
         let menu_phase = matches!(
             self.phase,
             Phase::QuickMenu { .. }
+                | Phase::Search { .. }
                 | Phase::About
                 | Phase::Networks { .. }
                 | Phase::NetworkScan { .. }
@@ -8464,6 +8490,7 @@ impl App {
                 return;
             }
             Phase::QuickMenu { .. } if self.keyboard.is_some() => self.draw_networks(out),
+            Phase::Search { hits, cursor } => self.draw_search(hits.len(), *cursor, out),
             Phase::QuickMenu { row } => {
                 QuickMenu {
                     row: *row,
@@ -11296,6 +11323,7 @@ impl App {
             self.phase,
             Phase::Shelf
                 | Phase::QuickMenu { .. }
+                | Phase::Search { .. }
                 | Phase::About
                 | Phase::SetClock { .. }
                 | Phase::Networks { .. }
@@ -14112,9 +14140,94 @@ impl App {
             self.held_dir = None;
         }
         match kb.press(btn) {
-            slot_ui::Typed::Cancelled => self.keyboard = None,
+            slot_ui::Typed::Cancelled => {
+                if self.keyboard_for() == Some(&KeyboardFor::Search) {
+                    self.phase = Phase::Shelf;
+                }
+                self.keyboard = None;
+            }
             slot_ui::Typed::Done(text) => self.keyboard_done(text),
             _ => {}
+        }
+    }
+
+    fn search_input(&mut self, action: Action) {
+        let Phase::Search { hits, cursor } = &mut self.phase else {
+            return;
+        };
+        match action {
+            Action::GbaDown(Btn::Up) if !hits.is_empty() => {
+                *cursor = (*cursor + hits.len() - 1) % hits.len();
+            }
+            Action::GbaDown(Btn::Down) if !hits.is_empty() => {
+                *cursor = (*cursor + 1) % hits.len();
+            }
+            Action::GbaDown(Btn::A) => {
+                if let Some(hit) = hits.get(*cursor) {
+                    let (platform, stem) = (hit.platform, hit.stem.clone());
+                    self.focus_search_hit(platform, &stem);
+                }
+            }
+            Action::GbaDown(Btn::B) | Action::QuickMenu => self.phase = Phase::Shelf,
+            _ => {}
+        }
+    }
+
+    fn focus_search_hit(&mut self, platform: Platform, stem: &str) {
+        let Some(shelf) = self.rack_at(Rack::Of(platform)) else {
+            return;
+        };
+        let Some(index) = self.shelves[shelf]
+            .1
+            .carts
+            .iter()
+            .position(|c| c.stem == stem)
+        else {
+            return;
+        };
+        self.sit(crate::editing::Seat { shelf, index });
+        self.phase = Phase::Shelf;
+        self.note_shelf();
+    }
+
+    pub(crate) fn search_window(&self) -> Option<(usize, &[SearchHit])> {
+        let Phase::Search { hits, cursor } = &self.phase else {
+            return None;
+        };
+        let (first, len) = slot_ui::net_window(self.canvas(), hits.len(), *cursor);
+        Some((first, &hits[first..first + len]))
+    }
+
+    pub(crate) fn set_search_faces(&mut self, faces: SearchFaces) {
+        self.search_faces = Some(faces);
+    }
+
+    fn draw_search(&self, count: usize, cursor: usize, out: &mut Vec<Draw>) {
+        let Some(faces) = &self.search_faces else {
+            return;
+        };
+        slot_ui::NetworkList {
+            lines: &faces.lines,
+            icons: None,
+            selected: cursor,
+            message: (count == 0).then_some(faces.empty),
+            pointer: self.quick_menu_faces.as_ref().map(|f| f.pointer),
+            ground: self.menu_ground(),
+            canvas: self.canvas(),
+        }
+        .draw_window(faces.first, count, out);
+        draw_empty_slot(self.canvas(), self.slot_faces, out);
+        if let Some(menu) = &self.quick_menu_faces {
+            let light = self.light();
+            let back = if light {
+                menu.legend_light[0]
+            } else {
+                menu.legend[0]
+            };
+            self.draw_side_legend(back, false, self.legend_y(), out);
+            if count > 0 {
+                self.draw_side_legend(faces.go[light as usize], true, self.legend_y(), out);
+            }
         }
     }
 
@@ -14126,6 +14239,13 @@ impl App {
         };
         let refuse = |a: &mut App| a.set_update(Some(UpdateState::Notice(NetNotice::Password)));
         match task {
+            KeyboardFor::Search => {
+                self.keyboard = None;
+                self.phase = Phase::Search {
+                    hits: crate::search::search(self.carts(), &text),
+                    cursor: 0,
+                };
+            }
             KeyboardFor::NetworkName if text.is_empty() => {}
             KeyboardFor::NetworkName => self.open_keyboard(
                 PASSWORD_TITLE,

@@ -38,3 +38,17 @@ jobs:
       - name: task lint:nds
         if: ${{ !cancelled() }}
         run: task lint:nds
+
+  linux-visual-tests:
+    name: Linux visual tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgles2
+
+      - name: Test shelf rendering and search
+        run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test --locked -p slot --test render_shelf --test shelf_search

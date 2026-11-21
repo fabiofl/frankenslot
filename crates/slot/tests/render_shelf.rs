@@ -18,8 +18,14 @@ static GL: Mutex<()> = Mutex::new(());
 
 fn compositor() -> Option<(MutexGuard<'static, ()>, HeadlessSurface, Compositor)> {
     let guard = GL.lock().unwrap_or_else(PoisonError::into_inner);
-    let surface = HeadlessSurface::new().ok()?;
-    let compositor = Compositor::new(&surface).ok()?;
+    let renderer = HeadlessSurface::new().and_then(|surface| {
+        let compositor = Compositor::new(&surface)?;
+        Ok((surface, compositor))
+    });
+    #[cfg(target_os = "linux")]
+    let (surface, compositor) = renderer.expect("initialize the headless shelf renderer");
+    #[cfg(target_os = "macos")]
+    let (surface, compositor) = renderer.ok()?;
     Some((guard, surface, compositor))
 }
 

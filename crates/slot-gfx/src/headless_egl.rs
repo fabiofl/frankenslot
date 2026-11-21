@@ -1,25 +1,19 @@
 use std::ffi::{c_char, c_void, CString};
+use std::ptr::{null, null_mut};
 
 use libloading::Library;
 
+use crate::fbdev::{
+    egl_error, open, sym, Ptr, EGL_ALPHA_SIZE, EGL_BLUE_SIZE, EGL_CONTEXT_CLIENT_VERSION,
+    EGL_GREEN_SIZE, EGL_NONE, EGL_OPENGL_ES2_BIT, EGL_OPENGL_ES_API, EGL_RED_SIZE,
+    EGL_RENDERABLE_TYPE, EGL_SURFACE_TYPE,
+};
 use crate::surface::{GfxError, Surface, OUT_H, OUT_W};
 
-const EGL_NONE: i32 = 0x3038;
-const EGL_RED_SIZE: i32 = 0x3024;
-const EGL_GREEN_SIZE: i32 = 0x3023;
-const EGL_BLUE_SIZE: i32 = 0x3022;
-const EGL_ALPHA_SIZE: i32 = 0x3021;
-const EGL_SURFACE_TYPE: i32 = 0x3033;
-const EGL_RENDERABLE_TYPE: i32 = 0x3040;
 const EGL_WIDTH: i32 = 0x3057;
 const EGL_HEIGHT: i32 = 0x3056;
 const EGL_PBUFFER_BIT: i32 = 0x0001;
-const EGL_OPENGL_ES2_BIT: i32 = 0x0004;
-const EGL_OPENGL_ES_API: u32 = 0x30A0;
-const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
-
-type Ptr = *mut c_void;
 
 /// A GLES2 context on Mesa's surfaceless platform, so the render tests run on Linux with no
 /// display, the way `HeadlessSurface` runs them on macOS.
@@ -28,20 +22,12 @@ pub struct HeadlessSurface {
     surface: Ptr,
     context: Ptr,
     make_current: unsafe extern "C" fn(Ptr, Ptr, Ptr, Ptr) -> u32,
+    get_current_context: unsafe extern "C" fn() -> Ptr,
+    get_error: unsafe extern "C" fn() -> i32,
     get_proc_address: unsafe extern "C" fn(*const c_char) -> *const c_void,
     terminate: unsafe extern "C" fn(Ptr) -> u32,
     gles: Library,
     _egl: Library,
-}
-
-fn open(name: &str) -> Result<Library, GfxError> {
-    unsafe { Library::new(name) }.map_err(|e| GfxError::Context(format!("{name}: {e}")))
-}
-
-unsafe fn sym<T: Copy>(lib: &Library, name: &str) -> Result<T, GfxError> {
-    lib.get::<T>(name.as_bytes())
-        .map(|s| *s)
-        .map_err(|e| GfxError::Context(format!("{name}: {e}")))
 }
 
 impl HeadlessSurface {
@@ -66,19 +52,31 @@ impl HeadlessSurface {
             let create_context: unsafe extern "C" fn(Ptr, Ptr, Ptr, *const i32) -> Ptr =
                 sym(&egl, "eglCreateContext")?;
             let get_error: unsafe extern "C" fn() -> i32 = sym(&egl, "eglGetError")?;
-            let fail = |what: &str| crate::egl_error(what, get_error());
+            let fail = |what: &str| egl_error(what, get_error());
+            let make_current = sym(&egl, "eglMakeCurrent")?;
+            let get_current_context = sym(&egl, "eglGetCurrentContext")?;
+            let get_proc_address = sym(&egl, "eglGetProcAddress")?;
+            let terminate = sym(&egl, "eglTerminate")?;
 
-            let display = get_platform_display(
-                EGL_PLATFORM_SURFACELESS_MESA,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            );
+            let display = get_platform_display(EGL_PLATFORM_SURFACELESS_MESA, null_mut(), null());
             if display.is_null() {
                 return Err(fail("eglGetPlatformDisplay"));
             }
-            if initialize(display, std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+            if initialize(display, null_mut(), null_mut()) == 0 {
                 return Err(fail("eglInitialize"));
             }
+            let mut headless = HeadlessSurface {
+                display,
+                surface: null_mut(),
+                context: null_mut(),
+                make_current,
+                get_current_context,
+                get_error,
+                get_proc_address,
+                terminate,
+                gles,
+                _egl: egl,
+            };
             if bind_api(EGL_OPENGL_ES_API) == 0 {
                 return Err(fail("eglBindAPI"));
             }
@@ -97,37 +95,22 @@ impl HeadlessSurface {
                 EGL_OPENGL_ES2_BIT,
                 EGL_NONE,
             ];
-            let mut config: Ptr = std::ptr::null_mut();
+            let mut config: Ptr = null_mut();
             let mut found = 0;
             if choose_config(display, attrs.as_ptr(), &mut config, 1, &mut found) == 0 || found == 0
             {
                 return Err(fail("eglChooseConfig"));
             }
             let size = [EGL_WIDTH, OUT_W as i32, EGL_HEIGHT, OUT_H as i32, EGL_NONE];
-            let surface = create_pbuffer(display, config, size.as_ptr());
-            if surface.is_null() {
+            headless.surface = create_pbuffer(display, config, size.as_ptr());
+            if headless.surface.is_null() {
                 return Err(fail("eglCreatePbufferSurface"));
             }
             let context_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
-            let context = create_context(
-                display,
-                config,
-                std::ptr::null_mut(),
-                context_attrs.as_ptr(),
-            );
-            if context.is_null() {
+            headless.context = create_context(display, config, null_mut(), context_attrs.as_ptr());
+            if headless.context.is_null() {
                 return Err(fail("eglCreateContext"));
             }
-            let mut headless = HeadlessSurface {
-                display,
-                surface,
-                context,
-                make_current: sym(&egl, "eglMakeCurrent")?,
-                get_proc_address: sym(&egl, "eglGetProcAddress")?,
-                terminate: sym(&egl, "eglTerminate")?,
-                gles,
-                _egl: egl,
-            };
             headless.make_current()?;
             Ok(headless)
         }
@@ -139,7 +122,7 @@ impl Surface for HeadlessSurface {
         let made =
             unsafe { (self.make_current)(self.display, self.surface, self.surface, self.context) };
         match made {
-            0 => Err(GfxError::Context("eglMakeCurrent refused".into())),
+            0 => Err(egl_error("eglMakeCurrent", unsafe { (self.get_error)() })),
             _ => Ok(()),
         }
     }
@@ -155,9 +138,12 @@ impl Surface for HeadlessSurface {
 
     fn proc_address(&self, name: &str) -> *const c_void {
         let Ok(c) = CString::new(name) else {
-            return std::ptr::null();
+            return null();
         };
-        match unsafe { self.gles.get::<unsafe extern "C" fn()>(name.as_bytes()) } {
+        match unsafe {
+            self.gles
+                .get::<unsafe extern "C" fn()>(c.as_bytes_with_nul())
+        } {
             Ok(f) => *f as *const c_void,
             Err(_) => unsafe { (self.get_proc_address)(c.as_ptr()) },
         }
@@ -167,12 +153,9 @@ impl Surface for HeadlessSurface {
 impl Drop for HeadlessSurface {
     fn drop(&mut self) {
         unsafe {
-            (self.make_current)(
-                self.display,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
+            if !self.context.is_null() && (self.get_current_context)() == self.context {
+                (self.make_current)(self.display, null_mut(), null_mut(), null_mut());
+            }
             (self.terminate)(self.display);
         }
     }
